@@ -1,0 +1,2 @@
+nicegui==4.0.0
+plotext==6.1.0
