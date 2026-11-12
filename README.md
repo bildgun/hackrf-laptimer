@@ -59,5 +59,3 @@ python laptimer/gui.py           # http://127.0.0.1:8080
 Sygnał każdego drona zapisuje się w `laptimer/logs/<data_godzina>/<dron>.json`. Wykres jest w sekcji „Sygnał po wyścigu”.
 
 Przełącznik „Test 2,4 GHz” pozwala sprawdzić licznik bez VTX: aparatura TX16S z protokołem CW nadaje na 2400 + RF Chan. MHz.
-
-Samotest logiki wyścigu (bez HackRF): `python laptimer/race.py`, wynik `OK`.
