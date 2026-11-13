@@ -1,2 +1,3 @@
 nicegui==4.0.0
+numpy==2.5.4
 plotext==6.1.0

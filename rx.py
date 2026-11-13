@@ -2,8 +2,8 @@
 """Skaner pasma FPV 5,8 GHz na HackRF: wykres mocy w terminalu, jak skaner Wi-Fi.
 
 Uruchomienie: hackrf-rx
-              hackrf-rx --lna 32 --vga 40     # bardzo słabe, odległe sygnały
-              hackrf-rx --lna 8 --vga 20      # nadajnik blisko (mniej przesterowania)
+              hackrf-rx --lna 32 --vga 8      # bardzo słabe, odległe sygnały
+              hackrf-rx --lna 8 --vga 8       # nadajnik blisko (mniej przesterowania)
               hackrf-rx -f 5600:5960          # węższy zakres
 Wyjście:      Ctrl+C
 """
@@ -24,7 +24,7 @@ CLEAR_SCREEN = "\033[H\033[J"  # kursor w lewy górny róg i czyszczenie ekranu
 class TerminalScanner:
     """Czyta hackrf_sweep w głównym wątku i co klatkę rysuje widmo w terminalu."""
 
-    def __init__(self, freq="5300:5960", lna=24, vga=30, amp=False, bin_hz=1_000_000):
+    def __init__(self, freq="5300:5960", lna=24, vga=8, amp=False, bin_hz=1_000_000):
         cmd = ["hackrf_sweep", "-f", freq, "-w", str(bin_hz), "-l", str(lna), "-g", str(vga), "-a", str(int(amp))]
         # hackrf_sweep co sekundę wypisuje na stderr statystyki, które rozjeżdżałyby wykres
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
@@ -90,7 +90,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-f", "--freq", default="5300:5960", help="zakres częstotliwości w MHz, min:max")
     parser.add_argument("--lna", type=int, default=24, help="wzmocnienie LNA w dB (0–40, co 8)")
-    parser.add_argument("--vga", type=int, default=30, help="wzmocnienie VGA w dB (0–62, co 2)")
+    parser.add_argument("--vga", type=int, default=8, help="wzmocnienie VGA w dB (0–62, co 2)")
     parser.add_argument("--amp", action="store_true", help="przedwzmacniacz +14 dB (nie włączaj w pobliżu nadajnika)")
     parser.add_argument("--ymin", type=float, default=-75, help="dolna granica osi Y w dB")
     parser.add_argument("--ymax", type=float, default=0, help="górna granica osi Y w dB")

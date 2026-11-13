@@ -1,4 +1,6 @@
 """Odbiór widma z HackRF przez hackrf_sweep. Same dane, bez interfejsu."""
+import contextlib
+import csv
 import statistics
 import subprocess
 import threading
@@ -69,15 +71,54 @@ def status_text(floor, peaks):
     return f"Szum: {floor:.0f} dB   Najsilniejsze: {strongest or 'brak'}"
 
 
+class CsvRecorder:
+    """Zapis widma do pliku CSV: czas, częstotliwość w MHz i poziom w dB każdego binu z hackrf_sweep.
+
+    Wartości są surowe, bez wygładzania z wykresu. Pisze wątek odbioru, a zamyka interfejs, stąd zamek.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.error = None  # błąd, przez który zapis się przerwał, np. pełny dysk
+        self.lock = threading.Lock()
+        self.file = open(path, "w", newline="")
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(["time", "freq_mhz", "level_db"])
+
+    def write(self, line):
+        date, clock = line.split(",")[:2]
+        when = f"{date} {clock.strip()}"  # czas z hackrf_sweep, czyli moment pomiaru
+        rows = [(when, freq, level) for freq, level in parse_line(line)]
+        with self.lock:
+            if self.file.closed:
+                return
+            try:
+                self.writer.writerows(rows)
+            except OSError as e:
+                # Wyjątek zabiłby wątek odbioru, a razem z nim wykres, więc przerywamy tylko zapis
+                self.error = e
+                with contextlib.suppress(OSError):
+                    self.file.close()
+
+    @property
+    def closed(self):
+        return self.file.closed
+
+    def close(self):
+        with self.lock:
+            self.file.close()
+
+
 class Scanner:
     """Uruchamia hackrf_sweep, a wątek w tle na bieżąco zbiera z niego wygładzone widmo."""
 
-    def __init__(self, freq="800:1000", lna=24, vga=30, amp=False, bin_hz=1_000_000):
+    def __init__(self, freq="800:1000", lna=24, vga=8, amp=False, bin_hz=1_000_000):
         cmd = ["hackrf_sweep", "-f", freq, "-w", str(bin_hz), "-l", str(lna), "-g", str(vga), "-a", str(int(amp))]
         # stderr zostaje w konsoli: interfejsowi w przeglądarce nie przeszkadza, a błędy hackrf_sweep widać od razu
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
         self.spectrum = {}  # MHz -> wygładzony poziom w dB
         self.hold = {}      # MHz -> najwyższy surowy odczyt (max-hold)
+        self.recorder = None  # CsvRecorder, jeśli widmo ma się też zapisywać do pliku
         threading.Thread(target=self._receive, daemon=True).start()
 
     def _receive(self):
@@ -89,6 +130,10 @@ class Scanner:
             previous = self.spectrum.get(freq, level)
             self.spectrum[freq] = previous + ALPHA * (level - previous)
             self.hold[freq] = max(self.hold.get(freq, level), level)
+        # Kopia, bo interfejs może właśnie wyłączyć zapis i ustawić tu None
+        recorder = self.recorder
+        if recorder:
+            recorder.write(line)
 
     def clear_hold(self):
         self.hold = {}
