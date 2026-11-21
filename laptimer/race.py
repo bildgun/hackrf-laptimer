@@ -63,7 +63,13 @@ class Pilot:
             self.max_level = level
         else:
             self.max_level = max(self.max_level, level)
+        return self.cross(level, t)
 
+    def cross(self, level, t):
+        """Porównuje średni poziom z progami. Gdy przelot właśnie się skończył, zwraca czas jego szczytu, a w innym razie None.
+
+        Osobno od sample(), bo w logu z wyścigu (recount) średnia jest już policzona.
+        """
         if not self.inside:
             if level >= self.enter:
                 self.inside = True
@@ -163,6 +169,7 @@ class Race:
                 data = {
                     "enter": pilot.enter,
                     "exit": pilot.exit,
+                    "min_lap": self.min_lap,
                     "passes": [round(when - self.start_t, 3) for when in pilot.passes],
                     "samples": [[round(when - self.start_t, 3), round(level, 1)] for when, level in pilot.log],
                 }
@@ -172,7 +179,7 @@ class Race:
             print(f"Nie zapisano logów wyścigu: {e}")
 
     def standings(self, now):
-        """Wyniki każdego drona w kolejności dodania: okrążenie, czasy w sekundach i sygnał w dB."""
+        """Wyniki każdego drona w kolejności dodania: okrążenie, czasy w sekundach, sygnał w dB i czy jest teraz w bramce."""
         with self.lock:
             rows = []
             for pilot in self.pilots:
@@ -187,6 +194,7 @@ class Race:
                     "freq": pilot.freq,
                     "level": pilot.level,
                     "max_level": pilot.max_level,
+                    "inside": pilot.inside,
                     "lap": min(len(pilot.passes), self.laps),
                     "done": finished,
                     "passes": len(pilot.passes),
@@ -195,6 +203,25 @@ class Race:
                     "total": None if self.start_t is None else end - self.start_t,
                 })
             return rows
+
+
+def recount(samples, enter, exit_level, min_lap):
+    """Przeloty z logu wyścigu przy innych progach, w sekundach od startu, do poprawiania progów po wyścigu.
+
+    W logu jest już średnia, więc porównujemy ją z progami tak samo jak w trakcie wyścigu.
+    Log kończy się na mecie, więc przy niższych progach może wyjść więcej przelotów, niż liczy wyścig.
+    """
+    pilot = Pilot("", 0, enter, exit_level)
+    passes = []
+    for t, level in samples:
+        peak_t = pilot.cross(level, t)
+        if peak_t is None:
+            continue
+        # Tak jak w Race._count_pass: przelot zbyt szybko po poprzednim to odbicie sygnału
+        if passes and peak_t - passes[-1] < min_lap:
+            continue
+        passes.append(peak_t)
+    return passes
 
 
 def check(pilots, laps, test24):

@@ -7,16 +7,19 @@ Wyjście:      Ctrl+C
 import json
 import time
 from functools import partial
+from pathlib import Path
 
 from fastapi import Response
 from nicegui import app, ui
 
 from race import (BAND_24, CHANNELS_58, DEFAULT_FREQS_24, DEFAULT_FREQS_58, LOGS, Pilot, Race, RaceScanner,
-                  check, sweep_range)
+                  check, recount, sweep_range)
 from video import VideoReceiver, png
 
 # Startowe progi nowego drona w dB. Właściwe ustawia się przy kalibracji, patrząc na kolumnę „Sygnał”.
 THRESHOLDS = {"enter": -35, "exit": -50}
+# Ustawienia z ekranu zapisują się przy każdym Zastosuj/Start, żeby kalibracja przetrwała restart programu
+SETTINGS = Path(__file__).resolve().parent / "settings.json"
 
 COLUMNS = [
     {"name": key, "label": label, "field": key, "align": "left"}
@@ -28,19 +31,33 @@ COLUMNS = [
         ("best", "Najlepsze"),
         ("total", "Czas całkowity"),
         ("signal", "Sygnał / max [dB]"),
+        ("gate", "Bramka"),
     ]
 ]
 
-# Krótki dźwięk w przeglądarce po każdym zaliczonym przelocie.
+# Dźwięki w przeglądarce: niski, gdy dron wleci w bramkę, wysoki i komunikat głosowy po zaliczonym przelocie.
+# Pilot w goglach nie widzi ekranu, a przelot zalicza się dopiero, gdy dron odleci od bramki.
 # AudioContext jest jeden na stronę, bo przeglądarki ograniczają ich liczbę.
-BEEP = """
-const ctx = window.beepCtx ??= new AudioContext();
-const osc = ctx.createOscillator();
-ctx.resume();
-osc.frequency.value = 880;
-osc.connect(ctx.destination);
-osc.start();
-osc.stop(ctx.currentTime + 0.15);
+SOUNDS = """
+<script>
+window.beep = (frequency) => {
+  const ctx = window.beepCtx ??= new AudioContext();
+  const osc = ctx.createOscillator();
+  ctx.resume();
+  osc.frequency.value = frequency;
+  osc.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.15);
+};
+window.say = (text) => {
+  const utterance = new SpeechSynthesisUtterance(text);
+  // Bez polskiego głosu przeglądarka przeczytałaby polskie słowa po angielsku
+  const voice = speechSynthesis.getVoices().find((candidate) => candidate.lang.startsWith("pl"));
+  if (voice) utterance.voice = voice;
+  utterance.lang = "pl-PL";
+  speechSynthesis.speak(utterance);
+};
+</script>
 """
 
 
@@ -76,7 +93,18 @@ def table_row(index, row, laps):
         "best": format_time(row["best"]),
         "total": format_time(row["total"]),
         "signal": signal,
+        "gate": "w bramce" if row["inside"] else "",
     }
+
+
+def announcement(row):
+    """Komunikat głosowy po zaliczonym przelocie, np. „Dron 1, okrążenie 2, 14,8”."""
+    if row["passes"] == 1:
+        return f"{row['name']}, start"
+    lap_time = f"{row['last']:.1f}".replace(".", ",")
+    if row["done"]:
+        return f"{row['name']}, meta, {lap_time}"
+    return f"{row['name']}, okrążenie {row['passes'] - 1}, {lap_time}"
 
 
 def log_chart_options():
@@ -125,6 +153,11 @@ class LapTimerApp:
                 {"name": "Dron 2", "freq": DEFAULT_FREQS_58[1], **THRESHOLDS},
             ],
         }
+        if SETTINGS.exists():
+            try:
+                self.cfg.update(json.loads(SETTINGS.read_text()))
+            except (OSError, ValueError) as e:
+                print(f"Nie wczytano {SETTINGS}, zostają ustawienia domyślne: {e}")
         self.race = Race(LOGS)
         self.scanner = None
         self.sweep = None  # (zakres, LNA, VGA), z którymi działa teraz hackrf_sweep
@@ -171,6 +204,10 @@ class LapTimerApp:
             return False
 
         self.race.configure(pilots, int(cfg["laps"]), cfg["min_lap"])
+        try:
+            SETTINGS.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        except OSError as e:
+            print(f"Nie zapisano ustawień: {e}")
 
         sweep = (sweep_range(pilots), cfg["lna"], cfg["vga"])
         # Przy tym samym zakresie hackrf_sweep zostaje: restart to około sekundy bez danych,
@@ -190,6 +227,21 @@ class LapTimerApp:
 
     def stop_race(self):
         self.race.stop(time.time())
+
+    def capture(self, pilot, key):
+        """Ustawia próg wejścia albo wyjścia na bieżący sygnał drona i od razu go stosuje.
+
+        Do szybkiej kalibracji: dron z włączonym VTX trzyma się tam, gdzie próg ma wypaść,
+        np. 30–50 cm od anteny dla wejścia i kilka metrów dalej dla wyjścia.
+        """
+        index = self.cfg["pilots"].index(pilot)
+        rows = self.race.standings(time.time())
+        # Wyścig zna tylko drony z ostatniego Zastosuj, więc nowego drona albo nowy kanał trzeba najpierw zastosować
+        if index >= len(rows) or rows[index]["freq"] != pilot["freq"] or rows[index]["level"] is None:
+            ui.notify("Brak sygnału tego drona: kliknij „Zastosuj” i sprawdź, czy VTX nadaje", type="warning")
+            return
+        pilot[key] = round(rows[index]["level"])
+        self.apply()
 
     def stop_scanner(self):
         if self.scanner:
@@ -262,9 +314,13 @@ class LapTimerApp:
                     channel.bind_value(pilot, "freq")
                     channel.classes("w-36")
                 ui.number("Wejście [dB]").bind_value(pilot, "enter").tooltip("sygnał powyżej = dron w bramce")
+                capture = ui.button(icon="colorize", on_click=partial(self.capture, pilot, "enter"))
+                capture.props("flat round dense").tooltip("ustaw na bieżący sygnał: dron tam, gdzie ma się zaczynać przelot")
                 exit_threshold = ui.number("Wyjście [dB]")
                 exit_threshold.bind_value(pilot, "exit")
                 exit_threshold.tooltip("sygnał poniżej = dron odleciał; dopiero wtedy może się zaliczyć kolejny przelot")
+                capture = ui.button(icon="colorize", on_click=partial(self.capture, pilot, "exit"))
+                capture.props("flat round dense").tooltip("ustaw na bieżący sygnał: dron tam, gdzie przelot ma się kończyć")
                 if not self.cfg["test24"]:
                     video = ui.button(icon="videocam", on_click=partial(self.show_video, pilot)).props("flat round")
                     video.tooltip("wideo z kamery tego drona")
@@ -272,6 +328,7 @@ class LapTimerApp:
 
     def page(self):
         ui.add_css(".board td, .board th { font-size: 1.5rem !important; }")
+        ui.add_head_html(SOUNDS)
         ui.number.default_classes("w-28")
         ui.select.default_classes("w-28")
 
@@ -311,21 +368,64 @@ class LapTimerApp:
                 drones = []
             drone_select.set_options(drones, value=None)
 
+        log_samples = []  # sygnał drona wybranego w „Sygnał po wyścigu”
+
         def show_log(event):
-            """Sygnał drona w czasie. Żółte linie: poziome to progi wejścia i wyjścia, pionowe to zaliczone przeloty."""
+            """Sygnał drona w czasie, a w polach nad wykresem progi, z którymi leciał."""
+            nonlocal log_samples
             if not event.value:
                 return
             log = json.loads((LOGS / race_select.value / f"{event.value}.json").read_text())
-            series = chart.options["series"][0]
-            series["data"] = log["samples"]
-            marks = [{"yAxis": log["enter"]}, {"yAxis": log["exit"]}]
-            marks += [{"xAxis": t} for t in log["passes"]]
-            series["markLine"]["data"] = marks
+            log_samples = log["samples"]
+            chart.options["series"][0]["data"] = log_samples
+            # Starsze logi nie mają min_lap, wtedy bierzemy ten z ustawień
+            min_lap_field.value = log.get("min_lap", self.cfg["min_lap"])
+            exit_field.value = log["exit"]
+            enter_field.value = log["enter"]
+            show_passes()
+
+        def show_passes():
+            """Przelicza przeloty przy progach z pól nad wykresem. Żółte linie: poziome to progi, pionowe to przeloty."""
+            enter, exit_level, min_lap = enter_field.value, exit_field.value, min_lap_field.value
+            if not log_samples or None in (enter, exit_level, min_lap):
+                return
+            if exit_level >= enter:
+                passes_label.text = "Wyjście musi być niższe od wejścia"
+                return
+            passes = recount(log_samples, enter, exit_level, min_lap)
+            marks = [{"yAxis": enter}, {"yAxis": exit_level}]
+            marks += [{"xAxis": t} for t in passes]
+            chart.options["series"][0]["markLine"]["data"] = marks
+            lap_times = ", ".join(format_time(b - a) for a, b in zip(passes, passes[1:]))
+            passes_label.text = f"Przeloty: {len(passes)}. Okrążenia: {lap_times or '—'}"
+
+        def use_thresholds():
+            """Przenosi progi z pól nad wykresem do drona o tej samej nazwie i od razu je stosuje."""
+            if not log_samples or drone_select.value is None:
+                ui.notify("Najpierw wybierz wyścig i drona", type="warning")
+                return
+            for number, pilot in enumerate(self.cfg["pilots"], 1):
+                if (pilot["name"] or f"Dron {number}") == drone_select.value:
+                    break
+            else:
+                ui.notify(f"W ustawieniach nie ma drona „{drone_select.value}”", type="warning")
+                return
+            pilot["enter"] = enter_field.value
+            pilot["exit"] = exit_field.value
+            self.cfg["min_lap"] = min_lap_field.value
+            if self.apply():
+                ui.notify(f"{drone_select.value}: nowe progi działają", type="positive")
 
         with ui.expansion("Sygnał po wyścigu", icon="show_chart").classes("w-full"):
-            with ui.row():
+            with ui.row(align_items="end"):
                 race_select = ui.select([], label="Wyścig", on_change=show_drones).classes("w-56")
                 drone_select = ui.select([], label="Dron", on_change=show_log).classes("w-56")
+                enter_field = ui.number("Wejście [dB]", on_change=show_passes)
+                exit_field = ui.number("Wyjście [dB]", on_change=show_passes)
+                min_lap_field = ui.number("Min. okrążenie [s]", min=0, on_change=show_passes)
+                use = ui.button("Ustaw te progi dronowi", on_click=use_thresholds).props("outline")
+                use.tooltip("progi i min. okrążenie z tych pól trafią do ustawień i od razu zadziałają")
+            passes_label = ui.label("Wybierz wyścig i drona, a potem zmieniaj progi, aż liczba przelotów się zgodzi")
             chart = ui.echart(log_chart_options()).classes("w-full h-[60vh]")
 
         def update_race_list():
@@ -333,18 +433,24 @@ class LapTimerApp:
             if races != race_select.options:
                 race_select.set_options(races)
 
-        passes_seen = 0  # przeloty przy poprzednim odświeżeniu; jeśli przybyło, gramy dźwięk
+        seen = {}  # nazwa drona -> (przeloty, czy w bramce) przy poprzednim odświeżeniu
 
         def refresh():
-            nonlocal passes_seen
             now = time.time()
             race = self.race
             standings = race.standings(now)
 
-            passes = sum(row["passes"] for row in standings)
-            if passes > passes_seen:
-                ui.run_javascript(BEEP)
-            passes_seen = passes
+            for row in standings:
+                previous = seen.get(row["name"])
+                # Nowa karta przy pierwszym odświeżeniu nie ogłasza przelotów sprzed jej otwarcia
+                if previous is not None:
+                    passes, inside = previous
+                    if row["inside"] and not inside:
+                        ui.run_javascript("beep(440)")
+                    if row["passes"] > passes:
+                        ui.run_javascript("beep(880)")
+                        ui.run_javascript(f"say({json.dumps(announcement(row))})")
+                seen[row["name"]] = (row["passes"], row["inside"])
 
             table.rows = [table_row(i, row, race.laps) for i, row in enumerate(standings)]
 

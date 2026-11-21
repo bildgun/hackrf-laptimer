@@ -63,12 +63,14 @@ time,freq_mhz,level_db
 python laptimer/gui.py           # http://127.0.0.1:8080
 ```
 
-1. W „Ustawieniach” dodaj drony i wybierz ich kanały (domyślnie RaceBand R1 i R2). Po każdej zmianie kliknij „Zastosuj”.
-2. Kalibracja: przeleć przez bramkę i ustaw progi według kolumny „Sygnał / max”. **Wejście** ustaw poniżej szczytu sygnału przy bramce, a **Wyjście** wyraźnie niżej niż Wejście. Sygnał to średnia z ostatnich 100 ms (`AVERAGE` w `laptimer/race.py`), bo pojedyncze odczyty skaczą o kilkanaście dB.
+1. W „Ustawieniach” dodaj drony i wybierz ich kanały (domyślnie RaceBand R1 i R2). Po każdej zmianie kliknij „Zastosuj”. Ustawienia zapisują się w `laptimer/settings.json` przy każdym „Zastosuj” i „Start”, więc zostają po restarcie programu.
+2. Kalibracja: przeleć przez bramkę i ustaw progi według kolumny „Sygnał / max”. **Wejście** ustaw poniżej szczytu sygnału przy bramce, a **Wyjście** wyraźnie niżej niż Wejście. Sygnał to średnia z ostatnich 100 ms (`AVERAGE` w `laptimer/race.py`), bo pojedyncze odczyty skaczą o kilkanaście dB. Szybciej idzie przyciskami z pipetą: ustawiają próg na bieżący sygnał i od razu go stosują. Dron z włączonym VTX trzymaj najpierw tam, gdzie przelot ma się zaczynać (Wejście), a potem tam, gdzie ma się kończyć (Wyjście). W locie szczyt bywa o kilka dB niższy niż przy dronie trzymanym w ręce, więc progi warto potem poprawić na wykresie po wyścigu.
 3. Kliknij „Start”. Pierwszy przelot to holeshot, kolejne to okrążenia. Przelot wcześniej niż „Min. okrążenie” po poprzednim jest odrzucany jako odbicie sygnału.
 4. Wyścig kończy się, gdy wszyscy ukończą okrążenia, albo po kliknięciu „Stop”.
 
-Sygnał każdego drona zapisuje się w `laptimer/logs/<data_godzina>/<dron>.json`. Wykres jest w sekcji „Sygnał po wyścigu”.
+Dźwięki: niski, gdy dron wleci w bramkę (sygnał powyżej Wejścia, w tabeli „w bramce”), i wysoki z komunikatem głosowym po polsku, gdy przelot się zaliczy, np. „Dron 1, okrążenie 2, 14,8”. Przelot zalicza się dopiero wtedy, gdy dron odleci i sygnał spadnie poniżej Wyjścia, więc nie ma co czekać przy bramce. Przeglądarka gra dopiero po pierwszym kliknięciu na stronie, a głos wymaga syntezy mowy w systemie (w Ubuntu `speech-dispatcher` z `espeak-ng`).
+
+Sygnał każdego drona zapisuje się w `laptimer/logs/<data_godzina>/<dron>.json`. Wykres jest w sekcji „Sygnał po wyścigu”. Nad wykresem są progi i min. okrążenie, z którymi dron leciał. Po ich zmianie przeloty liczą się od nowa na zapisanym sygnale. Gdy liczba przelotów zgadza się z tym, co było naprawdę, „Ustaw te progi dronowi” przenosi je do ustawień.
 
 Przełącznik „Test 2,4 GHz” pozwala sprawdzić licznik bez VTX: aparatura TX16S z protokołem CW nadaje na 2400 + RF Chan. MHz.
 

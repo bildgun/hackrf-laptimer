@@ -2,3 +2,4 @@
 __pycache__/
 /laptimer/logs/
 /recordings/
+/laptimer/settings.json
