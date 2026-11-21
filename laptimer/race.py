@@ -2,6 +2,7 @@
 import json
 import sys
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import combinations
@@ -28,6 +29,7 @@ BAND_24 = (2400, 2483)  # do testów: TX16S z protokołem CW nadaje na 2400 + RF
 DEFAULT_FREQS_58 = TABLE["R"]  # RaceBand
 DEFAULT_FREQS_24 = [2420, 2440, 2460, 2480]
 LOGS = Path(__file__).resolve().parent / "logs"  # logs/<data i godzina startu>/<dron>.json
+AVERAGE = 0.1  # s; sygnał drona to średnia z odczytów z tylu ostatnich sekund
 
 
 @dataclass
@@ -36,16 +38,26 @@ class Pilot:
     freq: int     # MHz
     enter: float  # dB; sygnał powyżej oznacza, że dron jest przy bramce i zaczyna się przelot
     exit: float   # dB; poniżej przelot się kończy, a dopóki sygnał nie spadnie, nowy się nie zacznie (histereza)
-    level: float | None = None      # ostatni odczyt w dB
+    level: float | None = None      # ostatnia średnia z AVERAGE sekund w dB
     max_level: float | None = None  # maksimum od Zastosuj/Start, według niego ustawia się próg wejścia
     inside: bool = False            # dron jest między wejściem a wyjściem
     peak: float = 0.0               # najwyższy poziom w bieżącym przelocie
     peak_t: float = 0.0             # i jego czas, czyli czas przelotu: wtedy dron jest najbliżej bramki
     passes: list = field(default_factory=list)  # czasy zaliczonych przelotów, pierwszy to holeshot
     log: list = field(default_factory=list)     # (czas, dB) od startu do końca wyścigu, do wykresu po wyścigu
+    recent: deque = field(default_factory=deque)  # (czas, dB) surowych odczytów z ostatnich AVERAGE sekund
 
-    def sample(self, level, t):
-        """Przyjmuje nowy odczyt. Gdy przelot właśnie się skończył, zwraca czas jego szczytu, a w innym razie None."""
+    def sample(self, raw, t):
+        """Przyjmuje nowy odczyt. Gdy przelot właśnie się skończył, zwraca czas jego szczytu, a w innym razie None.
+
+        Z progami porównujemy średnią, a nie pojedynczy odczyt. Odczyty z hackrf_sweep skaczą
+        o kilkanaście dB z milisekundy na milisekundę i jeden taki skok potrafił zaliczyć albo zakończyć przelot.
+        """
+        self.recent.append((t, raw))
+        while self.recent[0][0] <= t - AVERAGE:
+            self.recent.popleft()
+        level = sum(value for _, value in self.recent) / len(self.recent)
+
         self.level = level
         if self.max_level is None:
             self.max_level = level
@@ -119,12 +131,13 @@ class Race:
             for pilot in self.pilots:
                 if not lo <= pilot.freq < hi:
                     continue
-                level = level_at(pilot.freq)
+                passed = pilot.sample(level_at(pilot.freq), t)
                 if self.running and t >= self.start_t:
-                    # Każda próbka zostaje w pamięci, to do ~400 na sekundę na drona.
+                    # Zapisujemy średnią, bo to ją widać na wykresie razem z progami.
+                    # Każda próbka zostaje w pamięci, to do ~600 na sekundę na drona.
                     # Przy wyścigach trwających godzinami trzeba będzie to przerzedzić.
-                    pilot.log.append((t, level))
-                self._count_pass(pilot, pilot.sample(level, t))
+                    pilot.log.append((t, pilot.level))
+                self._count_pass(pilot, passed)
 
     def _count_pass(self, pilot, t):
         if t is None or not self.running or t < self.start_t or self.done(pilot):

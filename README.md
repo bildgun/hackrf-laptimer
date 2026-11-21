@@ -64,7 +64,7 @@ python laptimer/gui.py           # http://127.0.0.1:8080
 ```
 
 1. W „Ustawieniach” dodaj drony i wybierz ich kanały (domyślnie RaceBand R1 i R2). Po każdej zmianie kliknij „Zastosuj”.
-2. Kalibracja: przeleć przez bramkę i ustaw progi według kolumny „Sygnał / max”. **Wejście** ustaw poniżej szczytu sygnału przy bramce, a **Wyjście** wyraźnie niżej niż Wejście.
+2. Kalibracja: przeleć przez bramkę i ustaw progi według kolumny „Sygnał / max”. **Wejście** ustaw poniżej szczytu sygnału przy bramce, a **Wyjście** wyraźnie niżej niż Wejście. Sygnał to średnia z ostatnich 100 ms (`AVERAGE` w `laptimer/race.py`), bo pojedyncze odczyty skaczą o kilkanaście dB.
 3. Kliknij „Start”. Pierwszy przelot to holeshot, kolejne to okrążenia. Przelot wcześniej niż „Min. okrążenie” po poprzednim jest odrzucany jako odbicie sygnału.
 4. Wyścig kończy się, gdy wszyscy ukończą okrążenia, albo po kliknięciu „Stop”.
 
